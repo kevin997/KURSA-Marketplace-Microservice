@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
+version: '3.8'
+
+services:
+  # Combined Laravel App with Nginx
+  app:
+    image: localhost:5000/csl-marketplace-api:latest
+    container_name: csl-marketplace-api
+    restart: unless-stopped
+    ports:
+      - "8003:80"
+    volumes:
+      - app-storage:/var/www/html/storage
+      - app-bootstrap-cache:/var/www/html/bootstrap/cache
+    environment:
+      - APP_ENV=${APP_ENV:-staging}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - MAIN_API_URL=${MAIN_API_URL}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - KAFKA_BROKERS=${KAFKA_BROKERS}
+      - TARAMONEY_API_KEY=${TARAMONEY_API_KEY}
+      - TARAMONEY_WEBHOOK_SECRET=${TARAMONEY_WEBHOOK_SECRET}
+      - CONTAINER_ROLE=app
+    networks:
+      - csl-marketplace-network
+      - csl-shared-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health/index.php"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Queue Worker Service
+  queue:
+    image: localhost:5000/csl-marketplace-api:latest
+    container_name: csl-marketplace-api-queue
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    volumes:
+      - app-storage:/var/www/html/storage
+    environment:
+      - CONTAINER_ROLE=queue
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - APP_ENV=${APP_ENV}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - QUEUE_CONNECTION=database
+    networks:
+      - csl-marketplace-network
+      - csl-shared-network
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'supervisord' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Kafka Outbox Processor (flushes pending outbox rows to Kafka every 30s)
+  outbox-processor:
+    image: localhost:5000/csl-marketplace-api:latest
+    container_name: csl-marketplace-api-outbox-processor
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    volumes:
+      - app-storage:/var/www/html/storage
+    environment:
+      - CONTAINER_ROLE=outbox-processor
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - APP_ENV=${APP_ENV}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - KAFKA_BROKERS=${KAFKA_BROKERS}
+    networks:
+      - csl-marketplace-network
+      - csl-shared-network
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'kafka:process-outbox\\|kafka-outbox-processor' || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  # Kafka Consumer Service (template.publish_to_marketplace → Product)
+  kafka-consumer:
+    image: localhost:5000/csl-marketplace-api:latest
+    container_name: csl-marketplace-api-kafka-consumer
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    volumes:
+      - app-storage:/var/www/html/storage
+    environment:
+      - CONTAINER_ROLE=kafka-consumer
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - APP_ENV=${APP_ENV}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - KAFKA_BROKERS=${KAFKA_BROKERS}
+    networks:
+      - csl-marketplace-network
+      - csl-shared-network
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'kafka:consume' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Scheduler Service
+  scheduler:
+    image: localhost:5000/csl-marketplace-api:latest
+    container_name: csl-marketplace-api-scheduler
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    volumes:
+      - app-storage:/var/www/html/storage
+    environment:
+      - CONTAINER_ROLE=scheduler
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - APP_ENV=${APP_ENV}
+      - APP_DEBUG=${APP_DEBUG:-false}
+    networks:
+      - csl-marketplace-network
+      - csl-shared-network
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'supervisord' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  csl-marketplace-network:
+    driver: bridge
+  csl-shared-network:
+    external: true
+    name: csl-shared-network
+
+volumes:
+  app-storage:
+    driver: local
+  app-bootstrap-cache:
+    driver: local
