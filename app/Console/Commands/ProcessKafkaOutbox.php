@@ -34,7 +34,13 @@ class ProcessKafkaOutbox extends Command
             $query->where('topic', $topicFilter);
         }
 
-        $messages = $query->get();
+        try {
+            $messages = $query->get();
+        } catch (\Illuminate\Database\QueryException $e) {
+            $this->warn('Database unavailable, skipping outbox flush: ' . $e->getMessage());
+            Log::warning('kafka:process-outbox: DB connection failed, will retry', ['error' => $e->getMessage()]);
+            return self::SUCCESS;
+        }
 
         if ($messages->isEmpty()) {
             $this->info('No pending messages in outbox.');

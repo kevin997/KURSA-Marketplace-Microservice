@@ -25,7 +25,7 @@ chmod -R 777 /var/www/html/bootstrap/cache
 chmod 777 /tmp
 
 # Wait for MySQL on app/queue/scheduler roles
-if [ "$CONTAINER_ROLE" = "app" ] || [ "$CONTAINER_ROLE" = "queue" ] || [ "$CONTAINER_ROLE" = "scheduler" ] || [ "$CONTAINER_ROLE" = "kafka-consumer" ]; then
+if [ "$CONTAINER_ROLE" = "app" ] || [ "$CONTAINER_ROLE" = "queue" ] || [ "$CONTAINER_ROLE" = "scheduler" ] || [ "$CONTAINER_ROLE" = "kafka-consumer" ] || [ "$CONTAINER_ROLE" = "outbox-processor" ]; then
     echo "Waiting for MySQL ($DB_HOST:3306)..."
     RETRY_COUNT=0
     MAX_RETRIES=15

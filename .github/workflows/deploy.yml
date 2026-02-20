@@ -1,0 +1,143 @@
+name: Deploy CSL Marketplace API to Production
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  APP_VERSION: 1.0.0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SERVER_IP: ${{ secrets.SERVER_IP }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+
+      - name: Install Ansible
+        run: |
+          sudo apt update
+          sudo apt install -y ansible
+
+      - name: Create Ansible inventory
+        run: |
+          echo "[ec2]" > inventory.ini
+          echo "$SERVER_IP ansible_user=$SSH_USER" >> inventory.ini
+
+      - name: Copy SSH key for GitHub access
+        env:
+          GITHUB_SSH_KEY: ${{ secrets.GIT_SSH_KEY }}
+        run: |
+          echo "$GITHUB_SSH_KEY" > github_deploy_key
+          chmod 600 github_deploy_key
+
+      - name: Create Ansible vars file
+        run: |
+          echo "---" > vars.yml
+          echo "github_ssh_key: |" >> vars.yml
+          sed 's/^/  /' github_deploy_key >> vars.yml
+          echo "app_name: csl-marketplace-api" >> vars.yml
+          echo "docker_registry: localhost:5000" >> vars.yml
+          echo "docker_tag: ${GITHUB_SHA:-latest}" >> vars.yml
+          echo "app_dir: /opt/csl-marketplace-api" >> vars.yml
+          echo "db_database: csl_marketplace_db" >> vars.yml
+          echo "db_username: marketplace_user" >> vars.yml
+          echo "db_password: 'Marketplace2024!Secure'" >> vars.yml
+
+      - name: Run Ansible playbook
+        id: deploy
+        run: |
+          ansible-playbook -i inventory.ini deploy-marketplace-api.yml -e "@vars.yml" --become
+        continue-on-error: true
+
+      - name: Set deployment status
+        id: status
+        run: echo "status=${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}" >> $GITHUB_OUTPUT
+
+      - name: Notify deployment status
+        if: always()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.status.outputs.status == 'success' && '✅ Deployment Successful' || '❌ Deployment Failed' }}",
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\nProduction"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:*\n${{ env.APP_VERSION }}-${{ github.sha }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ github.ref_name }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered by:*\n${{ github.actor }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow",
+                        "emoji": true
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

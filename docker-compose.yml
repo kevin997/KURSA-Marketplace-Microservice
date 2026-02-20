@@ -13,7 +13,7 @@ services:
       - app-storage:/var/www/html/storage
       - app-bootstrap-cache:/var/www/html/bootstrap/cache
     environment:
-      - APP_ENV=${APP_ENV:-staging}
+      - APP_ENV=${APP_ENV:-production}
       - APP_DEBUG=${APP_DEBUG:-false}
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}

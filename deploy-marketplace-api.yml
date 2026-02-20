@@ -1,0 +1,202 @@
+---
+- name: Deploy CSL Marketplace API
+  hosts: ec2
+  become: yes
+  vars:
+    ansible_ssh_common_args: '-o ServerAliveInterval=60 -o ServerAliveCountMax=120'
+    app_name: csl-marketplace-api
+    docker_registry: localhost:5000
+    docker_image: "{{ docker_registry }}/{{ app_name }}"
+    docker_tag: "{{ lookup('env', 'GITHUB_SHA') | default('latest', true) }}"
+    app_dir: /opt/csl-marketplace-api
+
+  tasks:
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: "0777"
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: /home/ubuntu/.ssh
+        state: directory
+        mode: '0700'
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Copy GitHub SSH key
+      ansible.builtin.copy:
+        content: "{{ github_ssh_key | default('') }}"
+        dest: /home/ubuntu/.ssh/github_deploy_key
+        mode: '0600'
+        owner: ubuntu
+        group: ubuntu
+      when: github_ssh_key is defined
+
+    - name: Configure SSH for GitHub
+      ansible.builtin.copy:
+        content: |
+          Host github.com
+            StrictHostKeyChecking no
+            User git
+            IdentityFile /home/ubuntu/.ssh/github_deploy_key
+        dest: /home/ubuntu/.ssh/config
+        mode: '0600'
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Clean up existing application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: absent
+
+    - name: Recreate application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: "0755"
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Clone repository from GitHub
+      ansible.builtin.git:
+        repo: git@github.com:kevin997/KURSA-Marketplace-Microservice.git
+        dest: "{{ app_dir }}"
+        version: main
+        force: yes
+        accept_hostkey: yes
+      become: yes
+      become_user: ubuntu
+      environment:
+        GIT_SSH_COMMAND: "ssh -i /home/ubuntu/.ssh/github_deploy_key -o StrictHostKeyChecking=no"
+
+    - name: Stop old containers
+      shell: cd {{ app_dir }} && docker compose down || true
+      ignore_errors: yes
+
+    - name: Remove old images
+      shell: |
+        docker rmi {{ app_name }}:latest || true
+        docker rmi {{ docker_image }}:latest || true
+      ignore_errors: yes
+
+    - name: Clean up Docker system
+      shell: docker system prune -af --volumes
+      ignore_errors: yes
+
+    - name: Check disk space availability
+      shell: |
+        AVAIL=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
+        if [ "$AVAIL" -lt 10 ]; then echo "Insufficient: ${AVAIL}GB" && exit 1; fi
+        echo "OK: ${AVAIL}GB"
+
+    - name: Start Docker registry if not running
+      shell: |
+        if docker ps -a | grep -q registry; then
+          docker ps | grep -q registry || docker start registry
+        else
+          docker run -d -p 5000:5000 --restart=always --name registry registry:2
+        fi
+      ignore_errors: yes
+
+    - name: Copy .env.staging to .env
+      ansible.builtin.copy:
+        src: "{{ app_dir }}/.env.staging"
+        dest: "{{ app_dir }}/.env"
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    - name: Install docker buildx plugin
+      ansible.builtin.apt:
+        name: docker-buildx-plugin
+        state: present
+        update_cache: yes
+      when: ansible_facts['os_family'] == 'Debian'
+      ignore_errors: yes
+
+    - name: Pre-pull PHP base image
+      shell: docker pull php:8.3-fpm
+      ignore_errors: yes
+      async: 900
+      poll: 15
+
+    - name: Pre-pull Composer image
+      shell: docker pull composer:2
+      ignore_errors: yes
+      async: 600
+      poll: 15
+
+    - name: Build Docker image (attempt 1)
+      shell: |
+        cd {{ app_dir }}
+        DOCKER_BUILDKIT=1 docker build --progress=plain -t {{ app_name }}:latest .
+      register: docker_build_result
+      ignore_errors: yes
+      async: 2400
+      poll: 30
+
+    - name: Build Docker image (attempt 2 - no-cache retry)
+      shell: |
+        cd {{ app_dir }}
+        DOCKER_BUILDKIT=1 docker build --no-cache --progress=plain -t {{ app_name }}:latest .
+      when: docker_build_result.failed | default(false)
+      ignore_errors: no
+      async: 2400
+      poll: 30
+
+    - name: Tag and push image to registry
+      shell: |
+        docker tag {{ app_name }}:latest {{ docker_image }}:{{ docker_tag }}
+        docker tag {{ app_name }}:latest {{ docker_image }}:latest
+        docker push {{ docker_image }}:{{ docker_tag }}
+        docker push {{ docker_image }}:latest
+      async: 900
+      poll: 15
+
+    - name: Start application with Docker Compose
+      shell: cd {{ app_dir }} && docker compose up -d
+      environment:
+        COMPOSE_HTTP_TIMEOUT: "300"
+      register: compose_result
+
+    - name: Display Docker Compose output
+      debug:
+        var: compose_result.stdout_lines
+
+    - name: Check migration logs
+      shell: cd {{ app_dir }} && docker compose logs app | grep -i "migration"
+      register: migration_result
+      ignore_errors: yes
+
+    - name: Display migration result
+      debug:
+        var: migration_result.stdout_lines
+
+    - name: Restart queue worker
+      shell: cd {{ app_dir }} && docker compose exec -T app php artisan queue:restart
+      ignore_errors: yes
+
+    - name: Check application health
+      shell: |
+        MAX_RETRIES=12
+        RETRY_COUNT=0
+        APP_URL="http://localhost:8003/health/index.php"
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" $APP_URL)
+          if [ "$STATUS" = "200" ]; then echo "Healthy!" && exit 0; fi
+          echo "Waiting... ($RETRY_COUNT/$MAX_RETRIES)"
+          RETRY_COUNT=$((RETRY_COUNT+1))
+          sleep 5
+        done
+        echo "Health check failed" && exit 1
+      register: health_check
+      ignore_errors: yes
+
+    - name: Display health check result
+      debug:
+        var: health_check.stdout_lines
