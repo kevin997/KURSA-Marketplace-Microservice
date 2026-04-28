@@ -114,6 +114,9 @@ class SellerController extends Controller
             $s = $request->search;
             $query->where(fn($q) => $q->where('name', 'like', "%{$s}%")->orWhere('description', 'like', "%{$s}%"));
         }
+        if ($request->has('template_id')) {
+            $query->where('template_id', $request->template_id);
+        }
 
         $products = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 15));
 
