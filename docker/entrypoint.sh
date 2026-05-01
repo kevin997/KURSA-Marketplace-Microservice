@@ -69,15 +69,40 @@ if [ "$CONTAINER_ROLE" = "queue" ]; then
     exec supervisord -c /etc/supervisor/conf.d/supervisord.conf
 elif [ "$CONTAINER_ROLE" = "scheduler" ]; then
     echo "Starting scheduler..."
+    # Fix permissions for any log files created by root during artisan commands
+    chown -R www-data:www-data /var/www/html/storage/logs
+    chmod -R 777 /var/www/html/storage/logs
     service cron start
     cp /var/www/html/docker/supervisor/scheduler.conf /etc/supervisor/conf.d/
     exec supervisord -c /etc/supervisor/conf.d/supervisord.conf
 elif [ "$CONTAINER_ROLE" = "kafka-consumer" ]; then
     echo "Starting Kafka consumer (template.publish_to_marketplace)..."
+    # Fix permissions for any log files created by root during artisan commands
+    chown -R www-data:www-data /var/www/html/storage/logs
+    chmod -R 777 /var/www/html/storage/logs
+    # Ensure required Kafka topics exist (wait for Kafka to be available)
+    if [ -n "$KAFKA_BROKERS" ]; then
+      echo "Waiting for Kafka topics to be available..."
+      RETRY_COUNT=0
+      MAX_RETRIES=30
+      until php artisan kafka:ensure-topics 2>/dev/null || [ $RETRY_COUNT -eq $MAX_RETRIES ]; do
+        echo "  attempt $((RETRY_COUNT+1))/$MAX_RETRIES: waiting for Kafka..."
+        sleep 2
+        RETRY_COUNT=$((RETRY_COUNT+1))
+      done
+      if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+        echo "Warning: Could not ensure Kafka topics exist. Consumer may retry on missing topics."
+      else
+        echo "Kafka topics verified."
+      fi
+    fi
     cp /var/www/html/docker/supervisor/kafka-consumer.conf /etc/supervisor/conf.d/
     exec supervisord -c /etc/supervisor/conf.d/supervisord.conf
 elif [ "$CONTAINER_ROLE" = "outbox-processor" ]; then
     echo "Starting Kafka outbox processor..."
+    # Fix permissions for any log files created by root during artisan commands
+    chown -R www-data:www-data /var/www/html/storage/logs
+    chmod -R 777 /var/www/html/storage/logs
     cp /var/www/html/docker/supervisor/outbox-processor.conf /etc/supervisor/conf.d/
     exec supervisord -c /etc/supervisor/conf.d/supervisord.conf
 else

@@ -9,6 +9,8 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use RdKafka\Conf;
+use RdKafka\KafkaConsumer;
 
 class ConsumeMarketplaceEvents extends Command
 {
@@ -35,18 +37,19 @@ class ConsumeMarketplaceEvents extends Command
         }
 
         $this->warn('php-rdkafka not available. Falling back to outbox polling.');
+
         return $this->consumeFromOutbox($topic, $timeout);
     }
 
     private function consumeWithRdKafka(string $brokers, string $topic, string $groupId, int $timeout): int
     {
-        $conf = new \RdKafka\Conf();
+        $conf = new Conf;
         $conf->set('metadata.broker.list', $brokers);
         $conf->set('group.id', $groupId);
         $conf->set('auto.offset.reset', 'earliest');
         $conf->set('enable.auto.commit', 'true');
 
-        $consumer = new \RdKafka\KafkaConsumer($conf);
+        $consumer = new KafkaConsumer($conf);
         $consumer->subscribe([$topic]);
 
         $this->info('Listening for messages... (Ctrl+C to stop)');
@@ -63,12 +66,35 @@ class ConsumeMarketplaceEvents extends Command
                     break;
                 default:
                     $this->error("Kafka error: {$message->errstr()}");
-                    Log::error('Marketplace Kafka consumer error', ['error' => $message->errstr()]);
+                    $level = $this->isRecoverableKafkaError($message->err) ? 'warning' : 'error';
+                    Log::log($level, 'Marketplace Kafka consumer error', [
+                        'error' => $message->errstr(),
+                        'code' => $message->err,
+                        'topic' => $topic,
+                        'group' => $groupId,
+                    ]);
+
+                    if ($this->isRecoverableKafkaError($message->err)) {
+                        $this->warn('Recoverable Kafka error; keeping consumer alive and retrying.');
+                        sleep(5);
+                    }
                     break;
             }
         }
 
         return self::SUCCESS;
+    }
+
+    private function isRecoverableKafkaError(int $errorCode): bool
+    {
+        return in_array($errorCode, [
+            RD_KAFKA_RESP_ERR__TRANSPORT,
+            RD_KAFKA_RESP_ERR__ALL_BROKERS_DOWN,
+            RD_KAFKA_RESP_ERR__UNKNOWN_TOPIC,
+            RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART,
+            RD_KAFKA_RESP_ERR_LEADER_NOT_AVAILABLE,
+            RD_KAFKA_RESP_ERR_NOT_LEADER_FOR_PARTITION,
+        ], true);
     }
 
     /**
@@ -108,13 +134,14 @@ class ConsumeMarketplaceEvents extends Command
 
     private function processMessage(string $payload): void
     {
-        $this->info('Received: ' . substr($payload, 0, 200));
+        $this->info('Received: '.substr($payload, 0, 200));
 
         try {
             $data = json_decode($payload, true);
 
-            if (!$data || !isset($data['event'])) {
+            if (! $data || ! isset($data['event'])) {
                 $this->warn('Invalid message format, skipping.');
+
                 return;
             }
 
@@ -136,8 +163,9 @@ class ConsumeMarketplaceEvents extends Command
         $sellerUserId = $data['seller_user_id'] ?? null;
         $templateId = $data['template_id'] ?? null;
 
-        if (!$sellerUserId || !$templateId) {
+        if (! $sellerUserId || ! $templateId) {
             $this->warn('Missing seller_user_id or template_id.');
+
             return;
         }
 
@@ -146,13 +174,13 @@ class ConsumeMarketplaceEvents extends Command
             ['user_id' => $sellerUserId],
             [
                 'company_name' => $data['seller_company'] ?? $data['seller_name'] ?? 'Unknown',
-                'is_verified' => !empty($data['seller_is_teacher']),
-                'verified_at' => !empty($data['seller_is_teacher']) ? now() : null,
+                'is_verified' => ! empty($data['seller_is_teacher']),
+                'verified_at' => ! empty($data['seller_is_teacher']) ? now() : null,
             ]
         );
 
         // If seller already exists but wasn't verified and is now a teacher, verify them
-        if (!$seller->is_verified && !empty($data['seller_is_teacher'])) {
+        if (! $seller->is_verified && ! empty($data['seller_is_teacher'])) {
             $seller->update([
                 'is_verified' => true,
                 'verified_at' => now(),
@@ -175,6 +203,7 @@ class ConsumeMarketplaceEvents extends Command
                 'is_published' => true,
             ]);
             $this->info("Updated product #{$existingProduct->id} for template #{$templateId}");
+
             return;
         }
 
