@@ -73,18 +73,8 @@
       environment:
         GIT_SSH_COMMAND: "ssh -i /home/ubuntu/.ssh/github_deploy_key -o StrictHostKeyChecking=no"
 
-    - name: Stop old containers
-      shell: cd {{ app_dir }} && docker compose down || true
-      ignore_errors: yes
-
-    - name: Remove old images
-      shell: |
-        docker rmi {{ app_name }}:latest || true
-        docker rmi {{ docker_image }}:latest || true
-      ignore_errors: yes
-
-    - name: Clean up Docker system
-      shell: docker system prune -af --volumes
+    - name: Prune unused Docker resources before build
+      shell: docker system prune -f
       ignore_errors: yes
 
     - name: Check disk space availability
@@ -134,7 +124,11 @@
     - name: Build Docker image (attempt 1)
       shell: |
         cd {{ app_dir }}
-        DOCKER_BUILDKIT=1 docker build --progress=plain -t {{ app_name }}:latest .
+        docker buildx build --load --progress=plain \
+          -t {{ app_name }}:latest \
+          -t {{ docker_image }}:{{ docker_tag }} \
+          -t {{ docker_image }}:latest \
+          .
       register: docker_build_result
       ignore_errors: yes
       async: 2400
@@ -143,23 +137,31 @@
     - name: Build Docker image (attempt 2 - no-cache retry)
       shell: |
         cd {{ app_dir }}
-        DOCKER_BUILDKIT=1 docker build --no-cache --progress=plain -t {{ app_name }}:latest .
+        docker buildx build --load --no-cache --progress=plain \
+          -t {{ app_name }}:latest \
+          -t {{ docker_image }}:{{ docker_tag }} \
+          -t {{ docker_image }}:latest \
+          .
       when: docker_build_result.failed | default(false)
       ignore_errors: no
       async: 2400
       poll: 30
 
-    - name: Tag and push image to registry
+    - name: Verify Docker image tags exist locally
       shell: |
-        docker tag {{ app_name }}:latest {{ docker_image }}:{{ docker_tag }}
-        docker tag {{ app_name }}:latest {{ docker_image }}:latest
+        docker image inspect {{ app_name }}:latest >/dev/null
+        docker image inspect {{ docker_image }}:{{ docker_tag }} >/dev/null
+        docker image inspect {{ docker_image }}:latest >/dev/null
+
+    - name: Push image to registry
+      shell: |
         docker push {{ docker_image }}:{{ docker_tag }}
         docker push {{ docker_image }}:latest
       async: 900
       poll: 15
 
     - name: Start application with Docker Compose
-      shell: cd {{ app_dir }} && docker compose up -d
+      shell: cd {{ app_dir }} && docker compose up -d --remove-orphans
       environment:
         COMPOSE_HTTP_TIMEOUT: "300"
       register: compose_result
