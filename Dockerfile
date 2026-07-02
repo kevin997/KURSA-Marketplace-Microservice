@@ -26,7 +26,9 @@ RUN apt-get update && apt-get install -y librdkafka-dev \
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 COPY composer.json composer.lock ./
-RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+# Cache mount: resilient/faster dependency installs in CI builds
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --prefer-dist
 
 RUN echo "[www]\nuser = www-data\ngroup = www-data\nlisten = 127.0.0.1:9000\nlisten.owner = www-data\nlisten.group = www-data\npm = dynamic\npm.max_children = 20\npm.start_servers = 4\npm.min_spare_servers = 2\npm.max_spare_servers = 6\npm.max_requests = 1000" > /usr/local/etc/php-fpm.d/www.conf
 
