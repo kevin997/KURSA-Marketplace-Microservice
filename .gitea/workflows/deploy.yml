@@ -1,0 +1,73 @@
+name: Deploy production
+
+# Self-hosted Gitea CI deploy (GitHub Actions is unavailable — the old
+# .github/workflows/deploy.yml Ansible pipeline is kept dormant for reference).
+# Builds the image on the runner, pushes it to the shared ecosystem registry,
+# then rolls out via SSH + docker compose on the production server.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: sh
+    env:
+      REGISTRY: registry.olkoo.com
+      IMAGE: registry.olkoo.com/csl/csl-marketplace-api
+      APP_DIR: /opt/csl-marketplace-api
+      SERVER: 31.97.179.151
+      HEALTH_URL: http://localhost:8003/health/index.php
+    steps:
+      - name: Install tools (git, docker CLI, buildx, ssh)
+        run: apk add --no-cache git docker-cli docker-cli-buildx openssh-client curl
+
+      - uses: actions/checkout@v4
+
+      - name: Log in to registry
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Build & push image
+        run: |
+          SHA=$(echo "$GITHUB_SHA" | cut -c1-12)
+          # --network=host: bridge-network builds hit ECONNRESET on package installs
+          DOCKER_BUILDKIT=1 docker build --network=host \
+            -t "$IMAGE:$SHA" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Deploy via docker compose
+        run: |
+          SHA=$(echo "$GITHUB_SHA" | cut -c1-12)
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+          # Pin the exact SHA into the compose file so manual restarts stay deterministic
+          sed "s|$IMAGE:latest|$IMAGE:$SHA|" docker-compose.yml > /tmp/compose-pinned.yml
+          scp $SSH_OPTS /tmp/compose-pinned.yml "root@$SERVER:$APP_DIR/docker-compose.yml"
+          ssh $SSH_OPTS "root@$SERVER" "cd $APP_DIR && docker compose pull && docker compose up -d --remove-orphans"
+
+      - name: Health check
+        run: |
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+          i=0
+          while [ $i -lt 12 ]; do
+            code=$(ssh $SSH_OPTS "root@$SERVER" "curl -s -o /dev/null -w '%{http_code}' $HEALTH_URL" || echo 000)
+            if [ "$code" = "200" ]; then echo "Application is healthy"; exit 0; fi
+            echo "Waiting for health... ($i/12) status=$code"
+            i=$((i+1)); sleep 5
+          done
+          echo "Application failed to become healthy"; exit 1
+
+      - name: Restart queue workers
+        run: |
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+          ssh $SSH_OPTS "root@$SERVER" "cd $APP_DIR && docker compose exec -T app php artisan queue:restart" || true

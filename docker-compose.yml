@@ -4,7 +4,7 @@ version: '3.8'
 services:
   # Combined Laravel App with Nginx
   app:
-    image: localhost:5000/csl-marketplace-api:latest
+    image: registry.olkoo.com/csl/csl-marketplace-api:latest
     container_name: csl-marketplace-api
     restart: unless-stopped
     ports:
@@ -38,7 +38,7 @@ services:
 
   # Queue Worker Service
   queue:
-    image: localhost:5000/csl-marketplace-api:latest
+    image: registry.olkoo.com/csl/csl-marketplace-api:latest
     container_name: csl-marketplace-api-queue
     restart: unless-stopped
     depends_on:
@@ -67,7 +67,7 @@ services:
 
   # Kafka Outbox Processor (flushes pending outbox rows to Kafka every 30s)
   outbox-processor:
-    image: localhost:5000/csl-marketplace-api:latest
+    image: registry.olkoo.com/csl/csl-marketplace-api:latest
     container_name: csl-marketplace-api-outbox-processor
     restart: unless-stopped
     depends_on:
@@ -96,7 +96,7 @@ services:
 
   # Kafka Consumer Service (template.publish_to_marketplace → Product)
   kafka-consumer:
-    image: localhost:5000/csl-marketplace-api:latest
+    image: registry.olkoo.com/csl/csl-marketplace-api:latest
     container_name: csl-marketplace-api-kafka-consumer
     restart: unless-stopped
     depends_on:
@@ -125,7 +125,7 @@ services:
 
   # Scheduler Service
   scheduler:
-    image: localhost:5000/csl-marketplace-api:latest
+    image: registry.olkoo.com/csl/csl-marketplace-api:latest
     container_name: csl-marketplace-api-scheduler
     restart: unless-stopped
     depends_on:
