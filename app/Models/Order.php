@@ -8,6 +8,10 @@ class Order extends Model
 {
     protected $fillable = ['order_number', 'user_id', 'total_amount', 'status'];
 
+    protected $casts = [
+        'total_amount' => 'float',
+    ];
+
     public function items()
     {
         return $this->hasMany(OrderItem::class);

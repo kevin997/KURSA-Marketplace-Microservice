@@ -10,6 +10,7 @@ class Transaction extends Model
 
     protected $casts = [
         'payload' => 'array',
+        'amount' => 'float',
     ];
 
     public function order()
