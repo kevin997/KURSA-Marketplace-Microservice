@@ -1,0 +1,58 @@
+# Deployment descriptor for Coolify.
+#
+# Two containers, where the previous deployment ran five. That is deliberate,
+# and it fixes a bug rather than cutting corners.
+#
+# CONTAINER_ROLE does not do what its name suggests. All four worker configs are
+# baked into the image at /etc/supervisor/conf.d/, and supervisord.conf includes
+# them with `files = /etc/supervisor/conf.d/*.conf`, so ANY worker container
+# starts every program: the Kafka consumer, the outbox processor, two queue
+# workers and the scheduler. The entrypoint's role branches only change a log
+# line and copy a file that is already there.
+#
+# Running four such containers therefore ran four Laravel schedulers
+# concurrently, so every scheduled task fired four times, and four outbox
+# processors risked publishing duplicate events. One worker container gives
+# exactly one of each.
+#
+# The `app` role is different: its branch runs nginx and php-fpm directly and
+# starts no workers, so the web tier still needs its own container.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Any value that is not a known worker role takes the nginx/php-fpm branch.
+      CONTAINER_ROLE: app
+    ports:
+      - "${APP_HOST_PORT:-8003}:80"
+    networks:
+      - csl-shared-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Any worker role starts all of them, for the reason above. Named `queue`
+      # because that is the least misleading of the four.
+      CONTAINER_ROLE: queue
+    # The image healthcheck curls a web port this container does not serve, so
+    # check the supervisor that actually owns these processes.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x supervisord >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    networks:
+      - csl-shared-network
+
+networks:
+  # Owned by the CSL-DevOps stack, which holds csl-mysql-marketplace and
+  # csl-kafka. External means join it, never create it.
+  csl-shared-network:
+    external: true
