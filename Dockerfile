@@ -1,5 +1,9 @@
-# CSL Marketplace API - Laravel 12.x with php:8.3-fpm
-FROM php:8.3-fpm
+# CSL Marketplace API - Laravel 12.x with php:8.5-fpm
+# Default to the Google pull-through mirror of the official image: Docker Hub
+# resolution was what repeatedly stalled Coolify builds. Override with
+#   --build-arg PHP_IMAGE=php:8.5-fpm
+ARG PHP_IMAGE=mirror.gcr.io/library/php:8.5-fpm
+FROM ${PHP_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
@@ -24,7 +28,7 @@ RUN apt-get update && apt-get install -y librdkafka-dev \
     && pecl install rdkafka && docker-php-ext-enable rdkafka \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+COPY --from=mirror.gcr.io/library/composer:2 /usr/bin/composer /usr/bin/composer
 COPY composer.json composer.lock ./
 # Cache mount: resilient/faster dependency installs in CI builds
 RUN --mount=type=cache,target=/root/.composer/cache \
