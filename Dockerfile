@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     supervisor cron netcat-openbsd default-mysql-client nano procps \
     && rm -rf /var/lib/apt/lists/*
 
-RUN docker-php-ext-install -j$(nproc) pdo_mysql mbstring exif pcntl bcmath zip opcache
+RUN docker-php-ext-install -j$(nproc) pdo_mysql mbstring exif pcntl bcmath zip
 
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg && docker-php-ext-install -j$(nproc) gd
 
