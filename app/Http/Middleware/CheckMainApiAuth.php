@@ -43,6 +43,7 @@ class CheckMainApiAuth
                 $this->syncSellerData($user);
 
                 // Merge user data into request for downstream controllers
+                $request->attributes->set('verified_marketplace_actor', $user);
                 $request->merge(['remote_user' => $user]);
                 return $next($request);
             }

@@ -38,6 +38,14 @@ Route::middleware('main_api.auth')->group(function () {
         return $remoteUser;
     });
 
+    // A non-production pilot; real desktop/mobile checkout stays disabled.
+    if (app()->environment('staging', 'testing')) {
+        Route::prefix('sandbox-checkout')->middleware('throttle:15,1')->group(function () {
+            Route::post('/start', [\App\Http\Controllers\Api\MarketplaceSandboxCheckoutController::class, 'start']);
+            Route::post('/readback', [\App\Http\Controllers\Api\MarketplaceSandboxCheckoutController::class, 'readback']);
+        });
+    }
+
     // Orders
     Route::get('/orders', [OrderController::class, 'index']);
     Route::post('/orders', [OrderController::class, 'store']);
