@@ -13,9 +13,6 @@ Route::get('/products/{id}', [ProductController::class, 'show']);
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/categories/{id}', [CategoryController::class, 'show'])->where('id', '[0-9]+');
 
-// Tara Money Webhook (no auth - verified by webhook secret)
-Route::post('/webhooks/taramoney', [OrderController::class, 'taraMoneyWebhook']);
-
 // Protected Routes (Remote User via Main API token)
 Route::middleware('main_api.auth')->group(function () {
     Route::get('/user', function (Request $request) {
@@ -45,7 +42,6 @@ Route::middleware('main_api.auth')->group(function () {
     Route::get('/orders', [OrderController::class, 'index']);
     Route::post('/orders', [OrderController::class, 'store']);
     Route::get('/orders/{id}', [OrderController::class, 'show']);
-    Route::post('/orders/{id}/simulate-payment', [OrderController::class, 'simulatePayment']);
 
     // Seller Panel (via external token auth — triggers callback to Main API)
     Route::prefix('seller')->group(function () {
