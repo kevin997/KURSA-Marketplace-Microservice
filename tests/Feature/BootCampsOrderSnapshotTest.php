@@ -181,9 +181,18 @@ class BootCampsOrderSnapshotTest extends TestCase
         $id = $this->postJson($route, ['product_id' => $product->id], $headers)
             ->assertOk()->assertJsonPath('status', 'ready')->assertJsonPath('amount_minor', 650)->json('attempt_id');
         $this->assertDatabaseCount('marketplace_entitlement_events', 0);
+        $entitlement = '/api/internal/marketplace/verified-entitlement';
+        $buyerAndTemplate = ['buyer_id' => 91, 'template_id' => 53];
+        $serviceHeaders = ['Authorization' => 'Bearer '.str_repeat('s', 36)];
+        $this->postJson($entitlement, $buyerAndTemplate)->assertUnauthorized();
+        $this->postJson($entitlement, $buyerAndTemplate, $serviceHeaders)->assertNotFound();
         $this->postJson('/api/sandbox-checkout/readback', ['attempt_id' => $id])->assertOk()->assertExactJson(['status' => 'verified']);
         $this->postJson('/api/sandbox-checkout/readback', ['attempt_id' => $id])->assertOk()->assertExactJson(['status' => 'verified']);
         $this->assertDatabaseCount('marketplace_entitlement_events', 1);
+        $this->postJson($entitlement, $buyerAndTemplate, $serviceHeaders)->assertOk()->assertExactJson([
+            'receipt_id' => $id, 'buyer_id' => 91, 'template_id' => 53, 'source_academy_id' => 15,
+        ]);
+        $this->postJson($entitlement, ['buyer_id' => 92, 'template_id' => 53], $serviceHeaders)->assertNotFound();
     }
 
     private function service(?CoreCheckoutAuthority $core = null): BootCampsOrderSnapshot

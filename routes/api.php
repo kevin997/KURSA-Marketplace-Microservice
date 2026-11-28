@@ -13,6 +13,11 @@ Route::get('/products/{id}', [ProductController::class, 'show']);
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/categories/{id}', [CategoryController::class, 'show'])->where('id', '[0-9]+');
 
+if (app()->environment('staging', 'testing')) {
+    Route::post('/internal/marketplace/verified-entitlement', \App\Http\Controllers\Api\VerifiedSandboxEntitlementController::class)
+        ->middleware('throttle:30,1');
+}
+
 // Protected Routes (Remote User via Main API token)
 Route::middleware('main_api.auth')->group(function () {
     Route::get('/user', function (Request $request) {
